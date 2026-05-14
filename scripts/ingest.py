@@ -151,40 +151,33 @@ def safe_float(v) -> float:
         return 0.0
 
 
-# ── dim upserts ────────────────────────────────────────────────────────────
+# ── dim batch upserts ──────────────────────────────────────────────────────
 
-def upsert_agent(sb, agent_id: str, nombre: str):
-    if not agent_id:
-        return
-    sb.table("dim_agent").upsert(
-        {"agent_id": agent_id, "nombre": nombre, "extension": agent_id},
-        on_conflict="agent_id",
-    ).execute()
+def batch_upsert_agents(sb, agents: dict):
+    """agents = {agent_id: nombre}"""
+    rows = [{"agent_id": k, "nombre": v, "extension": k} for k, v in agents.items() if k]
+    if rows:
+        sb.table("dim_agent").upsert(rows, on_conflict="agent_id").execute()
 
 
-def upsert_queue(sb, queue_id: str, nombre: str):
-    if not queue_id:
-        return
-    sb.table("dim_queue").upsert(
-        {
-            "queue_id": queue_id,
-            "nombre": nombre,
-            "codigo": queue_id,
-            "tipo": queue_tipo(nombre),
-        },
-        on_conflict="queue_id",
-    ).execute()
+def batch_upsert_queues(sb, queues: dict):
+    """queues = {queue_id: nombre}"""
+    rows = [{"queue_id": k, "nombre": v, "codigo": k, "tipo": queue_tipo(v)} for k, v in queues.items() if k]
+    if rows:
+        sb.table("dim_queue").upsert(rows, on_conflict="queue_id").execute()
 
 
-def upsert_date(sb, d: str):
-    if not d:
-        return
-    try:
-        dt = date.fromisoformat(d[:10])
-    except ValueError:
-        return
-    sb.table("dim_date").upsert(
-        {
+def batch_upsert_dates(sb, dates: set):
+    """dates = set of 'YYYY-MM-DD' strings"""
+    rows = []
+    for d in dates:
+        if not d:
+            continue
+        try:
+            dt = date.fromisoformat(d[:10])
+        except ValueError:
+            continue
+        rows.append({
             "date_key": dt.isoformat(),
             "anio": dt.year,
             "mes": dt.month,
@@ -200,14 +193,16 @@ def upsert_date(sb, d: str):
 # ── parsers / ingesters ────────────────────────────────────────────────────
 
 def ingest_call_reports(sb, rows, report_date: str):
-    records = []
+    agents, dates, records = {}, set(), []
+
     for r in rows:
         call_time = r.get("Call Time", "").strip()
         agent_id, agent_name = parse_agent_parens(r.get("From", ""))
-
-        upsert_agent(sb, agent_id, agent_name)
         d = call_time[:10] if len(call_time) >= 10 else report_date
-        upsert_date(sb, d)
+
+        if agent_id:
+            agents[agent_id] = agent_name
+        dates.add(d)
 
         records.append({
             "call_id":               r.get("Call ID", "").strip(),
@@ -225,26 +220,31 @@ def ingest_call_reports(sb, rows, report_date: str):
             "transcription":         r.get("Transcription", "").strip() or None,
         })
 
+    batch_upsert_agents(sb, agents)
+    batch_upsert_dates(sb, dates)
     if records:
         sb.table("fact_calls").upsert(records, on_conflict="call_id").execute()
         log.info(f"  fact_calls: {len(records)} rows")
 
 
 def ingest_agent_login(sb, rows, report_date: str):
-    records = []
+    agents, dates, records = {}, set(), []
     for r in rows:
         agent_id, agent_name = parse_agent(r.get("Agent", ""))
-        upsert_agent(sb, agent_id, agent_name)
         d = r.get("Day", report_date).strip()[:10]
-        upsert_date(sb, d)
+        if agent_id:
+            agents[agent_id] = agent_name
+        dates.add(d)
         records.append({
-            "date_key":               d,
-            "agent_id":               agent_id,
-            "logged_in":              r.get("Logged In", "").strip() or None,
-            "logged_out":             r.get("Logged Out", "").strip() or None,
+            "date_key":                d,
+            "agent_id":                agent_id,
+            "logged_in":               r.get("Logged In", "").strip() or None,
+            "logged_out":              r.get("Logged Out", "").strip() or None,
             "total_logged_in_seconds": dur_to_sec(r.get("Total Logged In per day", "")),
-            "total_talking_seconds":  dur_to_sec(r.get("Total Talking", "")),
+            "total_talking_seconds":   dur_to_sec(r.get("Total Talking", "")),
         })
+    batch_upsert_agents(sb, agents)
+    batch_upsert_dates(sb, dates)
     if records:
         sb.table("agent_login_history").upsert(
             records, on_conflict="date_key,agent_id,logged_in"
@@ -253,26 +253,30 @@ def ingest_agent_login(sb, rows, report_date: str):
 
 
 def ingest_agents_in_queue(sb, rows, report_date: str):
-    records = []
-    upsert_date(sb, report_date)
+    agents, queues, records = {}, {}, []
     for r in rows:
         q_id, q_name = norm_queue(r.get("Queue", ""))
         agent_id, agent_name = parse_agent(r.get("Agent", ""))
-        upsert_queue(sb, q_id, q_name)
-        upsert_agent(sb, agent_id, agent_name)
+        if q_id:
+            queues[q_id] = q_name
+        if agent_id:
+            agents[agent_id] = agent_name
         records.append({
-            "queue_id":               q_id,
-            "agent_id":               agent_id,
-            "report_date":            report_date,
+            "queue_id":                q_id,
+            "agent_id":                agent_id,
+            "report_date":             report_date,
             "total_logged_in_seconds": dur_to_sec(r.get("Total Logged In Time", "")),
-            "calls_answered":         safe_int(r.get("Calls Answered")),
-            "pct_calls_serviced":     pct_to_float(r.get("% Calls Serviced", "")),
+            "calls_answered":          safe_int(r.get("Calls Answered")),
+            "pct_calls_serviced":      pct_to_float(r.get("% Calls Serviced", "")),
             "calls_answered_per_hour": safe_float(r.get("Calls Answered Per Hour")),
             "ring_time_total_seconds": dur_to_sec(r.get("Ring Time Total", "")),
             "ring_time_mean_seconds":  dur_to_sec(r.get("Ring Time Mean", "")),
             "talk_time_total_seconds": dur_to_sec(r.get("Talk Time Total", "")),
             "talk_time_mean_seconds":  dur_to_sec(r.get("Talk Time Mean", "")),
         })
+    batch_upsert_agents(sb, agents)
+    batch_upsert_queues(sb, queues)
+    batch_upsert_dates(sb, {report_date})
     if records:
         sb.table("agents_in_queue_stats").upsert(
             records, on_conflict="queue_id,agent_id,report_date"
@@ -281,21 +285,23 @@ def ingest_agents_in_queue(sb, rows, report_date: str):
 
 
 def ingest_team_queue(sb, rows, report_date: str):
-    records = []
-    upsert_date(sb, report_date)
+    queues, records = {}, []
     for r in rows:
         q_id, q_name = norm_queue(r.get("Queue", ""))
-        upsert_queue(sb, q_id, q_name)
+        if q_id:
+            queues[q_id] = q_name
         records.append({
-            "queue_id":         q_id,
-            "report_date":      report_date,
-            "agents_in_team":   safe_int(r.get("Agents in Team")),
-            "calls_received":   safe_int(r.get("Number of Calls Received")),
-            "calls_serviced":   safe_int(r.get("Number of Calls Serviced")),
-            "calls_unanswered": safe_int(r.get("Number of Calls Unanswered")),
+            "queue_id":           q_id,
+            "report_date":        report_date,
+            "agents_in_team":     safe_int(r.get("Agents in Team")),
+            "calls_received":     safe_int(r.get("Number of Calls Received")),
+            "calls_serviced":     safe_int(r.get("Number of Calls Serviced")),
+            "calls_unanswered":   safe_int(r.get("Number of Calls Unanswered")),
             "total_talk_seconds": dur_to_sec(r.get("Total Talk Time", "")),
             "avg_talk_seconds":   dur_to_sec(r.get("Average Talk Time", "")),
         })
+    batch_upsert_queues(sb, queues)
+    batch_upsert_dates(sb, {report_date})
     if records:
         sb.table("team_queue_stats").upsert(
             records, on_conflict="queue_id,report_date"
@@ -304,22 +310,24 @@ def ingest_team_queue(sb, rows, report_date: str):
 
 
 def ingest_detailed_queue(sb, rows, report_date: str):
-    records = []
-    upsert_date(sb, report_date)
+    queues, records = {}, []
     for r in rows:
         q_id, q_name = norm_queue(r.get("Queue", ""))
-        upsert_queue(sb, q_id, q_name)
+        if q_id:
+            queues[q_id] = q_name
         records.append({
-            "queue_id":              q_id,
-            "report_date":           report_date,
-            "calls_total":           safe_int(r.get("Calls Total")),
-            "calls_abandoned":       safe_int(r.get("Calls Abandoned")),
-            "calls_answered":        safe_int(r.get("Calls Answered")),
-            "pct_calls_serviced":    pct_to_float(r.get("% Calls Serviced", "")),
-            "successful_callbacks":  safe_int(r.get("Successful Callbacks")),
+            "queue_id":                q_id,
+            "report_date":             report_date,
+            "calls_total":             safe_int(r.get("Calls Total")),
+            "calls_abandoned":         safe_int(r.get("Calls Abandoned")),
+            "calls_answered":          safe_int(r.get("Calls Answered")),
+            "pct_calls_serviced":      pct_to_float(r.get("% Calls Serviced", "")),
+            "successful_callbacks":    safe_int(r.get("Successful Callbacks")),
             "talk_time_total_seconds": dur_to_sec(r.get("Talk Time Total", "")),
             "talk_time_mean_seconds":  dur_to_sec(r.get("Talk Time Mean", "")),
         })
+    batch_upsert_queues(sb, queues)
+    batch_upsert_dates(sb, {report_date})
     if records:
         sb.table("detailed_queue_stats").upsert(
             records, on_conflict="queue_id,report_date"
@@ -328,27 +336,30 @@ def ingest_detailed_queue(sb, rows, report_date: str):
 
 
 def ingest_queue_performance(sb, rows, report_date: str):
-    records = []
-    upsert_date(sb, report_date)
+    agents, queues, records = {}, {}, []
     for r in rows:
         q_id, q_name = norm_queue(r.get("Queue", ""))
         ext = r.get("Extension", "").strip()
         agent_id, agent_name = parse_agent(ext) if ext else (None, None)
-        upsert_queue(sb, q_id, q_name)
+        if q_id:
+            queues[q_id] = q_name
         if agent_id:
-            upsert_agent(sb, agent_id, agent_name)
+            agents[agent_id] = agent_name
         records.append({
-            "queue_id":               q_id,
-            "agent_id":               agent_id or None,
-            "report_date":            report_date,
-            "queue_received_calls":   safe_int(r.get("Queue Received Calls")),
-            "queue_serviced_calls":   safe_int(r.get("Queue Serviced Calls")),
-            "queue_unanswered_calls": safe_int(r.get("Queue Unanswered Calls")),
+            "queue_id":                 q_id,
+            "agent_id":                 agent_id or None,
+            "report_date":              report_date,
+            "queue_received_calls":     safe_int(r.get("Queue Received Calls")),
+            "queue_serviced_calls":     safe_int(r.get("Queue Serviced Calls")),
+            "queue_unanswered_calls":   safe_int(r.get("Queue Unanswered Calls")),
             "extension_serviced_calls": safe_int(r.get("Extension Serviced Calls")),
-            "extension_polls":        safe_int(r.get("Extension Polls")),
-            "talk_time_seconds":      dur_to_sec(r.get("Talk Time", "")),
-            "avg_talk_time_seconds":  dur_to_sec(r.get("Average Talk Time", "")),
+            "extension_polls":          safe_int(r.get("Extension Polls")),
+            "talk_time_seconds":        dur_to_sec(r.get("Talk Time", "")),
+            "avg_talk_time_seconds":    dur_to_sec(r.get("Average Talk Time", "")),
         })
+    batch_upsert_agents(sb, agents)
+    batch_upsert_queues(sb, queues)
+    batch_upsert_dates(sb, {report_date})
     if records:
         sb.table("queue_performance").upsert(
             records, on_conflict="queue_id,agent_id,report_date"
@@ -357,49 +368,55 @@ def ingest_queue_performance(sb, rows, report_date: str):
 
 
 def ingest_queue_answered_calls(sb, rows, report_date: str):
-    records = []
+    agents, queues, dates, records = {}, {}, set(), []
     for r in rows:
         q_id, q_name = norm_queue(r.get("Queue", ""))
         dest_raw = r.get("Destination", "").strip()
         dest_id, dest_name = parse_agent(dest_raw) if dest_raw else (None, None)
-        upsert_queue(sb, q_id, q_name)
-        if dest_id:
-            upsert_agent(sb, dest_id, dest_name)
         call_time = r.get("Call Time", "").strip()
         d = call_time[:10] if len(call_time) >= 10 else report_date
-        upsert_date(sb, d)
+        if q_id:
+            queues[q_id] = q_name
+        if dest_id:
+            agents[dest_id] = dest_name
+        dates.add(d)
         records.append({
-            "queue_id":            q_id,
-            "call_time":           call_time or None,
+            "queue_id":             q_id,
+            "call_time":            call_time or None,
             "destination_agent_id": dest_id or None,
-            "caller_id":           r.get("Caller ID", "").strip() or None,
-            "ringing_seconds":     dur_to_sec(r.get("Ringing", "")),
-            "answer_time":         r.get("Answer Time", "").strip() or None,
-            "sentiment":           r.get("Sentiment", "").strip() or None,
+            "caller_id":            r.get("Caller ID", "").strip() or None,
+            "ringing_seconds":      dur_to_sec(r.get("Ringing", "")),
+            "answer_time":          r.get("Answer Time", "").strip() or None,
+            "sentiment":            r.get("Sentiment", "").strip() or None,
         })
+    batch_upsert_agents(sb, agents)
+    batch_upsert_queues(sb, queues)
+    batch_upsert_dates(sb, dates)
     if records:
         sb.table("queue_answered_calls").upsert(records).execute()
         log.info(f"  queue_answered_calls: {len(records)} rows")
 
 
 def ingest_extension_stats(sb, rows, report_date: str):
-    records = []
-    upsert_date(sb, report_date)
+    agents, records = {}, []
     for r in rows:
         agent_id, agent_name = parse_agent(r.get("Agent Extension", ""))
-        upsert_agent(sb, agent_id, agent_name)
+        if agent_id:
+            agents[agent_id] = agent_name
         records.append({
-            "agent_id":            agent_id,
-            "report_date":         report_date,
-            "inbound_answered":    safe_int(r.get("Inbound Answered")),
-            "inbound_unanswered":  safe_int(r.get("Inbound Unanswered")),
-            "outbound_answered":   safe_int(r.get("Outbound Answered")),
-            "outbound_unanswered": safe_int(r.get("Outbound Unanswered")),
-            "total_answered":      safe_int(r.get("Total Answered")),
-            "total_unanswered":    safe_int(r.get("Total Unanswered")),
+            "agent_id":              agent_id,
+            "report_date":           report_date,
+            "inbound_answered":      safe_int(r.get("Inbound Answered")),
+            "inbound_unanswered":    safe_int(r.get("Inbound Unanswered")),
+            "outbound_answered":     safe_int(r.get("Outbound Answered")),
+            "outbound_unanswered":   safe_int(r.get("Outbound Unanswered")),
+            "total_answered":        safe_int(r.get("Total Answered")),
+            "total_unanswered":      safe_int(r.get("Total Unanswered")),
             "total_talking_seconds": dur_to_sec(r.get("Total Talking Time", "")),
-            "sentiment":           r.get("Sentiment", "").strip() or None,
+            "sentiment":             r.get("Sentiment", "").strip() or None,
         })
+    batch_upsert_agents(sb, agents)
+    batch_upsert_dates(sb, {report_date})
     if records:
         sb.table("extension_statistics").upsert(
             records, on_conflict="agent_id,report_date"
@@ -408,16 +425,17 @@ def ingest_extension_stats(sb, rows, report_date: str):
 
 
 def ingest_user_activity(sb, rows, report_date: str):
-    records = []
+    dates, records = set(), []
     for r in rows:
         ts = r.get("Time Scale", "").strip()
         d = ts[:10] if len(ts) >= 10 else report_date
-        upsert_date(sb, d)
+        dates.add(d)
         records.append({
             "time_scale":      ts or None,
             "answered_calls":  safe_int(r.get("Answered Calls")),
             "unanswered_calls": safe_int(r.get("Unanswered Calls")),
         })
+    batch_upsert_dates(sb, dates)
     if records:
         sb.table("user_activity").upsert(records, on_conflict="time_scale").execute()
         log.info(f"  user_activity: {len(records)} rows")
