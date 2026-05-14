@@ -232,11 +232,18 @@ def ingest_call_reports(sb, rows, report_date: str):
             "transcription":         r.get("Transcription", "").strip() or None,
         })
 
+    # deduplicate by call_id — keep last occurrence
+    seen, unique = set(), []
+    for rec in reversed(records):
+        if rec["call_id"] and rec["call_id"] not in seen:
+            seen.add(rec["call_id"])
+            unique.append(rec)
+
     batch_upsert_agents(sb, agents)
     batch_upsert_dates(sb, dates)
-    if records:
-        sb.table("fact_calls").upsert(records, on_conflict="call_id").execute()
-        log.info(f"  fact_calls: {len(records)} rows")
+    if unique:
+        sb.table("fact_calls").upsert(unique, on_conflict="call_id").execute()
+        log.info(f"  fact_calls: {len(unique)} rows")
 
 
 def ingest_agent_login(sb, rows, report_date: str):
