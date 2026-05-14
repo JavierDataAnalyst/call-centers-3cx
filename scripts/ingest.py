@@ -215,6 +215,7 @@ _STATUS_MAP = {
     "failed":      "Failed",
     "transferred": "Transferred",
     "cancelled":   "Cancelled",
+    "waiting":     "Waiting",
 }
 
 
