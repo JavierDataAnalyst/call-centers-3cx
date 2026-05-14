@@ -137,6 +137,11 @@ def detect_type(path: Path, headers: list) -> str:
     return "unknown"
 
 
+def is_summary_row(row: dict) -> bool:
+    """Skip footer/totals rows that 3CX appends to every CSV."""
+    return any(str(v).strip() in ("Totals", "Total") for v in row.values())
+
+
 def safe_int(v) -> int:
     try:
         return int(v) if v and str(v).strip() else 0
@@ -200,7 +205,7 @@ def is_extension(agent_id: str) -> bool:
 def ingest_call_reports(sb, rows, report_date: str):
     agents, dates, records = {}, set(), []
 
-    for r in rows:
+    for r in [r for r in rows if not is_summary_row(r)]:
         call_time = r.get("Call Time", "").strip()
         agent_id, agent_name = parse_agent_parens(r.get("From", ""))
         d = call_time[:10] if len(call_time) >= 10 else report_date
@@ -236,7 +241,7 @@ def ingest_call_reports(sb, rows, report_date: str):
 
 def ingest_agent_login(sb, rows, report_date: str):
     agents, dates, records = {}, set(), []
-    for r in rows:
+    for r in [r for r in rows if not is_summary_row(r)]:
         agent_id, agent_name = parse_agent(r.get("Agent", ""))
         d = r.get("Day", report_date).strip()[:10]
         if agent_id:
@@ -261,7 +266,7 @@ def ingest_agent_login(sb, rows, report_date: str):
 
 def ingest_agents_in_queue(sb, rows, report_date: str):
     agents, queues, records = {}, {}, []
-    for r in rows:
+    for r in [r for r in rows if not is_summary_row(r)]:
         q_id, q_name = norm_queue(r.get("Queue", ""))
         agent_id, agent_name = parse_agent(r.get("Agent", ""))
         if q_id:
@@ -270,7 +275,7 @@ def ingest_agents_in_queue(sb, rows, report_date: str):
             agents[agent_id] = agent_name
         records.append({
             "queue_id":                q_id,
-            "agent_id":                agent_id,
+            "agent_id":                agent_id or None,
             "report_date":             report_date,
             "total_logged_in_seconds": dur_to_sec(r.get("Total Logged In Time", "")),
             "calls_answered":          safe_int(r.get("Calls Answered")),
@@ -376,7 +381,7 @@ def ingest_queue_performance(sb, rows, report_date: str):
 
 def ingest_queue_answered_calls(sb, rows, report_date: str):
     agents, queues, dates, records = {}, {}, set(), []
-    for r in rows:
+    for r in [r for r in rows if not is_summary_row(r)]:
         q_id, q_name = norm_queue(r.get("Queue", ""))
         dest_raw = r.get("Destination", "").strip()
         dest_id, dest_name = parse_agent(dest_raw) if dest_raw else (None, None)
@@ -433,7 +438,7 @@ def ingest_extension_stats(sb, rows, report_date: str):
 
 def ingest_user_activity(sb, rows, report_date: str):
     dates, records = set(), []
-    for r in rows:
+    for r in [r for r in rows if not is_summary_row(r)]:
         ts = r.get("Time Scale", "").strip()
         d = ts[:10] if len(ts) >= 10 else report_date
         dates.add(d)
