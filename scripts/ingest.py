@@ -185,9 +185,14 @@ def batch_upsert_dates(sb, dates: set):
             "dia_semana": dt.strftime("%A"),
             "semana": dt.isocalendar()[1],
             "es_fin_semana": dt.weekday() >= 5,
-        },
-        on_conflict="date_key",
-    ).execute()
+        })
+    if rows:
+        sb.table("dim_date").upsert(rows, on_conflict="date_key").execute()
+
+
+def is_extension(agent_id: str) -> bool:
+    """True if agent_id looks like an extension (≤5 digits), not a phone number."""
+    return bool(agent_id) and agent_id.isdigit() and len(agent_id) <= 5
 
 
 # ── parsers / ingesters ────────────────────────────────────────────────────
@@ -200,8 +205,10 @@ def ingest_call_reports(sb, rows, report_date: str):
         agent_id, agent_name = parse_agent_parens(r.get("From", ""))
         d = call_time[:10] if len(call_time) >= 10 else report_date
 
-        if agent_id:
+        if agent_id and is_extension(agent_id):
             agents[agent_id] = agent_name
+        else:
+            agent_id = None
         dates.add(d)
 
         records.append({
