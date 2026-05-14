@@ -481,11 +481,15 @@ def process_file(sb, path: Path):
 
     with open(path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
-        rows = list(reader)
+        raw_rows = list(reader)
 
-    if not rows:
+    if not raw_rows:
         log.warning("  Empty file — skipped")
         return
+
+    # Normalize column names: strip whitespace so "Answered Calls " == "Answered Calls"
+    rows = [{k.strip(): v for k, v in r.items()} for r in raw_rows]
+    log.info(f"  columns: {list(rows[0].keys())}")
 
     report_type = detect_type(path, list(rows[0].keys()))
     log.info(f"  type={report_type}  date={report_date}  rows={len(rows)}")
