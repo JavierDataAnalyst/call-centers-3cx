@@ -198,6 +198,34 @@ def is_extension(agent_id: str) -> bool:
     return bool(agent_id) and agent_id.isdigit() and len(agent_id) <= 5
 
 
+# ── direction / status normalizers ────────────────────────────────────────
+
+_DIRECTION_MAP = {
+    "inbound":       "Inbound",
+    "inbound queue": "Inbound",
+    "outbound":      "Outbound",
+    "internal":      "Internal",
+}
+
+_STATUS_MAP = {
+    "answered":    "Answered",
+    "unanswered":  "Unanswered",
+    "no answer":   "No Answer",
+    "busy":        "Busy",
+    "failed":      "Failed",
+    "transferred": "Transferred",
+    "cancelled":   "Cancelled",
+}
+
+
+def _norm_direction(v: str | None) -> str | None:
+    return _DIRECTION_MAP.get(v.lower(), None) if v else None
+
+
+def _norm_status(v: str | None) -> str | None:
+    return _STATUS_MAP.get(v.lower(), None) if v else None
+
+
 # ── parsers / ingesters ────────────────────────────────────────────────────
 
 def ingest_call_reports(sb, rows, report_date: str):
@@ -223,8 +251,8 @@ def ingest_call_reports(sb, rows, report_date: str):
             "agent_id":              agent_id or None,
             "direction":             direction,
             "status":                status,
-            "direction_id":          direction,
-            "status_id":             status,
+            "direction_id":          _norm_direction(direction),
+            "status_id":             _norm_status(status),
             "ringing_seconds":       dur_to_sec(r.get("Ringing", "")),
             "talking_seconds":       dur_to_sec(r.get("Talking", "")),
             "cost":                  safe_float(r.get("Cost", 0)),
