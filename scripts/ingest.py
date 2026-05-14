@@ -132,8 +132,6 @@ def detect_type(path: Path, headers: list) -> str:
         return "queue_answered_calls_by_wait_time"
     if "extension_stat" in name or ("inbound answered" in h and "agent extension" in h):
         return "extension_statistics_by_group"
-    if "user_activity" in name or ("answered calls" in h and "unanswered calls" in h and len(h) == 3):
-        return "user_activity"
     return "unknown"
 
 
@@ -447,23 +445,6 @@ def ingest_extension_stats(sb, rows, report_date: str):
         log.info(f"  extension_statistics: {len(records)} rows")
 
 
-def ingest_user_activity(sb, rows, report_date: str):
-    dates, records = set(), []
-    for r in [r for r in rows if not is_summary_row(r)]:
-        ts = r.get("Time Scale", "").strip()
-        d = ts[:10] if len(ts) >= 10 else report_date
-        dates.add(d)
-        records.append({
-            "time_scale":      ts or None,
-            "answered_calls":  safe_int(r.get("Answered Calls")),
-            "unanswered_calls": safe_int(r.get("Unanswered Calls")),
-        })
-    batch_upsert_dates(sb, dates)
-    if records:
-        sb.table("user_activity").upsert(records, on_conflict="time_scale").execute()
-        log.info(f"  user_activity: {len(records)} rows")
-
-
 INGESTERS = {
     "call_reports":                     ingest_call_reports,
     "agent_login_history":              ingest_agent_login,
@@ -473,7 +454,6 @@ INGESTERS = {
     "queue_performance":                ingest_queue_performance,
     "queue_answered_calls_by_wait_time": ingest_queue_answered_calls,
     "extension_statistics_by_group":    ingest_extension_stats,
-    "user_activity":                    ingest_user_activity,
 }
 
 
