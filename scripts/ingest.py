@@ -216,13 +216,17 @@ def ingest_call_reports(sb, rows, report_date: str):
             agent_id = None
         dates.add(d)
 
+        direction = r.get("Direction", "").strip() or None
+        status    = r.get("Status", "").strip() or None
         records.append({
             "call_id":               r.get("Call ID", "").strip(),
             "call_time":             call_time or None,
             "date_key":              d,
             "agent_id":              agent_id or None,
-            "direction":             r.get("Direction", "").strip() or None,
-            "status":                r.get("Status", "").strip() or None,
+            "direction":             direction,
+            "status":                status,
+            "direction_id":          direction,
+            "status_id":             status,
             "ringing_seconds":       dur_to_sec(r.get("Ringing", "")),
             "talking_seconds":       dur_to_sec(r.get("Talking", "")),
             "cost":                  safe_float(r.get("Cost", 0)),
