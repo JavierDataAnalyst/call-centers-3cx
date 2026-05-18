@@ -210,6 +210,60 @@ LANGUAGE sql SECURITY DEFINER AS $$
   ORDER BY alh.date_key DESC, da.nombre;
 $$;
 
+-- ── kpi_heatmap_por_status: calls by hour/day/status ────────
+
+CREATE OR REPLACE FUNCTION kpi_heatmap_por_status(
+  dept         TEXT DEFAULT 'todos',
+  fecha_inicio DATE DEFAULT NULL,
+  fecha_fin    DATE DEFAULT NULL,
+  p_agent_id   TEXT DEFAULT NULL
+)
+RETURNS TABLE(hora int, dia int, status_id text, total bigint)
+LANGUAGE sql SECURITY DEFINER AS $$
+  SELECT
+    EXTRACT(HOUR FROM fc.call_time AT TIME ZONE 'UTC')::int,
+    EXTRACT(DOW  FROM fc.call_time AT TIME ZONE 'UTC')::int,
+    fc.status_id,
+    COUNT(*)
+  FROM fact_calls fc
+  JOIN dim_agent da ON fc.agent_id = da.agent_id
+  WHERE da.es_equipo = true
+    AND (dept = 'todos' OR da.departamento = dept)
+    AND (fecha_inicio IS NULL OR fc.date_key >= fecha_inicio)
+    AND (fecha_fin   IS NULL OR fc.date_key <= fecha_fin)
+    AND (p_agent_id  IS NULL OR fc.agent_id  = p_agent_id)
+  GROUP BY 1, 2, 3;
+$$;
+
+-- ── kpi_sla_asa: SLA % + Average Speed of Answer per queue ───
+
+DROP FUNCTION IF EXISTS kpi_sla_asa();
+
+CREATE OR REPLACE FUNCTION kpi_sla_asa()
+RETURNS TABLE(
+  cola          text,
+  total_llamadas bigint,
+  dentro_sla    bigint,
+  pct_sla       numeric,
+  asa_avg_sec   numeric,
+  asa_med_sec   numeric,
+  asa_p90_sec   numeric
+)
+LANGUAGE sql SECURITY DEFINER AS $$
+  SELECT
+    dq.nombre,
+    COUNT(*),
+    COUNT(*) FILTER (WHERE qac.ringing_seconds <= 20),
+    ROUND(COUNT(*) FILTER (WHERE qac.ringing_seconds <= 20) * 100.0 / NULLIF(COUNT(*), 0), 1),
+    ROUND(AVG(qac.ringing_seconds)::numeric, 0),
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qac.ringing_seconds)::numeric, 0),
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qac.ringing_seconds)::numeric, 0)
+  FROM queue_answered_calls qac
+  JOIN dim_queue dq ON dq.queue_id = qac.queue_id
+  GROUP BY dq.nombre
+  ORDER BY 1;
+$$;
+
 -- ── get_llamadas_detalle: drill-down call records ─────────────
 
 CREATE OR REPLACE FUNCTION get_llamadas_detalle(

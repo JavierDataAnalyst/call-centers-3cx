@@ -211,6 +211,15 @@ CREATE TABLE IF NOT EXISTS user_activity (
     unanswered_calls INT
 );
 
+-- ── Agent Schedules ──────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS agent_schedules (
+    agent_id   TEXT PRIMARY KEY REFERENCES dim_agent(agent_id),
+    start_hour INT  NOT NULL,
+    end_hour   INT  NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- ── Indexes ───────────────────────────────────────────────────
 
 CREATE INDEX IF NOT EXISTS idx_fact_calls_date         ON fact_calls (date_key);

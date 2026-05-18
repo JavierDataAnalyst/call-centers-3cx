@@ -229,6 +229,19 @@ def _norm_status(v: str | None) -> str | None:
 
 # ── parsers / ingesters ────────────────────────────────────────────────────
 
+_RE_QUEUE_REPLACED  = re.compile(r'\((\d{3,4})\) was replaced by',    re.IGNORECASE)
+_RE_QUEUE_TRANSFER  = re.compile(r'transferred to [^(]+\((\d{3,4})\)', re.IGNORECASE)
+
+def _derive_call_source(details: str | None):
+    """Return (queue_id, call_source) derived from call_activity_details."""
+    if not details:
+        return None, "Directo"
+    if "was replaced by" in details.lower() or "transferred to wh financial" in details.lower():
+        m = _RE_QUEUE_REPLACED.search(details) or _RE_QUEUE_TRANSFER.search(details)
+        return (m.group(1) if m else None), "Cola"
+    return None, "Directo"
+
+
 def ingest_call_reports(sb, rows, report_date: str):
     agents, dates, records = {}, set(), []
 
@@ -245,6 +258,9 @@ def ingest_call_reports(sb, rows, report_date: str):
 
         direction = r.get("Direction", "").strip() or None
         status    = r.get("Status", "").strip() or None
+        details   = r.get("Call Activity Details", "").strip() or None
+        queue_id, call_source = _derive_call_source(details)
+
         records.append({
             "call_id":               r.get("Call ID", "").strip(),
             "call_time":             call_time or None,
@@ -257,7 +273,9 @@ def ingest_call_reports(sb, rows, report_date: str):
             "ringing_seconds":       dur_to_sec(r.get("Ringing", "")),
             "talking_seconds":       dur_to_sec(r.get("Talking", "")),
             "cost":                  safe_float(r.get("Cost", 0)),
-            "call_activity_details": r.get("Call Activity Details", "").strip() or None,
+            "call_activity_details": details,
+            "queue_id":              queue_id,
+            "call_source":           call_source,
             "sentiment":             r.get("Sentiment", "").strip() or None,
             "summary":               r.get("Summary", "").strip() or None,
             "transcription":         r.get("Transcription", "").strip() or None,
@@ -443,7 +461,9 @@ def ingest_queue_answered_calls(sb, rows, report_date: str):
     batch_upsert_queues(sb, queues)
     batch_upsert_dates(sb, dates)
     if records:
-        sb.table("queue_answered_calls").upsert(records).execute()
+        sb.table("queue_answered_calls").upsert(
+            records, on_conflict="queue_id,call_time,caller_id"
+        ).execute()
         log.info(f"  queue_answered_calls: {len(records)} rows")
 
 
