@@ -10,7 +10,12 @@
 ```
 3CX PBX
    │
-   │  Exportación manual de CSVs (9 tipos de reporte)
+   │  Exportación semanal de CSVs (9 tipos de reporte)
+   │  enviados automáticamente por email
+   ▼
+Outlook (correo corporativo)
+   │
+   │  Power Automate detecta el email con adjuntos
    ▼
 GitHub Repository  ──── push a data/incoming/ ────►  GitHub Actions
                                                              │
@@ -22,13 +27,27 @@ GitHub Repository  ──── push a data/incoming/ ────►  GitHub Ac
                                                Consultas via RPC (anon key)
 ```
 
+### Flujo detallado
+
+| Paso | Tecnología | Descripción |
+|---|---|---|
+| 1 | **3CX PBX** | Genera y envía reportes CSV por email semanalmente |
+| 2 | **Outlook** | Recibe el correo con los CSVs adjuntos |
+| 3 | **Power Automate** | Detecta el email → sube cada adjunto a `data/incoming/` vía GitHub API |
+| 4 | **GitHub Actions** | Trigger automático al detectar push en `data/incoming/**` |
+| 5 | **Python ETL** | Transforma y carga los datos en Supabase (batch upsert) |
+| 6 | **Supabase** | Almacena los datos en modelo estrella (PostgreSQL + RLS) |
+| 7 | **Vercel** | Sirve el dashboard Next.js — consulta Supabase vía RPC functions |
+
 ---
 
 ## Stack tecnológico
 
 | Capa | Tecnología |
 |---|---|
-| Datos fuente | 3CX PBX — exportación CSV |
+| Datos fuente | 3CX PBX — exportación CSV semanal |
+| Automatización | Power Automate (Microsoft 365) |
+| Versionado | GitHub |
 | Almacenamiento | Supabase (PostgreSQL + RLS) |
 | ETL | Python 3.11 · supabase-py · pandas |
 | CI/CD del pipeline | GitHub Actions |
@@ -61,6 +80,13 @@ GitHub Repository  ──── push a data/incoming/ ────►  GitHub Ac
   └──────────────┘
 ```
 
+### Departamentos
+
+| Departamento | Agentes | Cola asociada |
+|---|---|---|
+| **Customer Service** | Rafael Silva Pulido · Lina Serna Jacome · Andres Felipe Torres Roa | WH Financial - Servicio al Cliente |
+| **Lender Review** | David Santacruz · Laura Pinilla Salcedo · Maria Jimenez Fonseca · Yadira Angelica Cruz · Yeiman Manuel Jimenez Vargas · Yvessaint Loraint Amado Cubides | WH Financial - Calidad |
+
 ### Tablas de resumen
 
 | Tabla | Fuente CSV | Descripción |
@@ -73,6 +99,7 @@ GitHub Repository  ──── push a data/incoming/ ────►  GitHub Ac
 | `queue_answered_calls` | `queue_answered_calls_by_wait_time_*.csv` | Llamadas con tiempo de espera |
 | `extension_statistics` | `extension_statistics_by_group_*.csv` | Estadísticas por extensión |
 | `user_activity` | `user_activity_*.csv` | Actividad general del sistema |
+| `agent_schedules` | Supabase (edición manual) | Horarios por agente para alertas de overtime |
 
 ---
 
@@ -90,7 +117,7 @@ GitHub Repository  ──── push a data/incoming/ ────►  GitHub Ac
 │   ├── schema.sql              # Schema completo (ejecutar una vez en Supabase)
 │   └── functions.sql           # RPC functions para el dashboard
 ├── data/
-│   ├── incoming/               # Depositar CSVs aquí → dispara el pipeline
+│   ├── incoming/               # Power Automate deposita CSVs aquí → dispara el pipeline
 │   └── processed/              # CSVs archivados tras ingesta exitosa
 ├── .env.example
 └── README.md
@@ -102,18 +129,18 @@ GitHub Repository  ──── push a data/incoming/ ────►  GitHub Ac
 
 | Archivo | Tabla destino |
 |---|---|
-| `call_reports_YYYY-MM-DD.csv` | `fact_calls` |
-| `agent_login_history_YYYY-MM-DD.csv` | `agent_login_history` |
-| `agents_in_queue_statistics_YYYY-MM-DD.csv` | `agents_in_queue_stats` |
-| `team_queue_general_statistics_YYYY-MM-DD.csv` | `team_queue_stats` |
-| `detailed_queue_statistics_YYYY-MM-DD.csv` | `detailed_queue_stats` |
-| `queue_performance_YYYY-MM-DD.csv` | `queue_performance` |
-| `queue_answered_calls_by_wait_time_YYYY-MM-DD.csv` | `queue_answered_calls` |
-| `extension_statistics_by_group_YYYY-MM-DD.csv` | `extension_statistics` |
-| `user_activity_YYYY-MM-DD.csv` | `user_activity` |
+| `call_reports_*.csv` | `fact_calls` |
+| `agent_login_history_*.csv` | `agent_login_history` |
+| `agents_in_queue_statistics_*.csv` | `agents_in_queue_stats` |
+| `team_queue_general_statistics_*.csv` | `team_queue_stats` |
+| `detailed_queue_statistics_*.csv` | `detailed_queue_stats` |
+| `queue_performance_*.csv` | `queue_performance` |
+| `queue_answered_calls_by_wait_time_*.csv` | `queue_answered_calls` |
+| `extension_statistics_by_group_*.csv` | `extension_statistics` |
+| `user_activity_*.csv` | `user_activity` |
 
-> El ETL detecta el tipo por nombre de archivo y por headers del CSV.  
-> La fecha en el nombre es opcional pero recomendada.
+> El ETL detecta el tipo por **headers del CSV**, no por el nombre del archivo.  
+> El nombre con fecha es opcional — Power Automate sube los archivos con el nombre original del adjunto.
 
 ---
 
@@ -134,6 +161,25 @@ GitHub Repository  ──── push a data/incoming/ ────►  GitHub Ac
 
 ---
 
+## Power Automate — Configuración del flow
+
+**Trigger:** Nuevo email en Outlook con adjuntos (filtrado por remitente o asunto de 3CX)
+
+**Acciones:**
+1. `Aplicar a cada uno` — itera sobre los adjuntos del email
+2. `HTTP PUT` — sube cada CSV a `data/incoming/` vía GitHub API
+
+```
+PUT https://api.github.com/repos/{owner}/{repo}/contents/data/incoming/{nombre_archivo}
+Authorization: Bearer {GITHUB_PAT}
+Body: { "message": "auto: ingest {nombre}", "content": "{base64_content}" }
+```
+
+**Secrets requeridos en Power Automate:**
+- `GITHUB_PAT` — Personal Access Token con scope `repo`
+
+---
+
 ## GitHub Actions
 
 **Trigger:** push de archivos a `data/incoming/**`
@@ -146,12 +192,50 @@ GitHub Repository  ──── push a data/incoming/ ────►  GitHub Ac
 5. Mover CSVs a `data/processed/`
 6. Commit automático `[skip ci]`
 
-**Secrets requeridos:**
+**Secrets requeridos en GitHub:**
 
 | Secret | Descripción |
 |---|---|
 | `SUPABASE_URL` | URL del proyecto Supabase |
 | `SUPABASE_KEY` | Service role key (escritura) |
+
+---
+
+## Supabase — RPC Functions
+
+| Función | Descripción |
+|---|---|
+| `get_equipo()` | Lista de agentes del equipo |
+| `get_agent_schedules()` | Horarios por agente (editable sin código) |
+| `kpi_llamadas(dept, fechas, status, agent)` | KPIs globales de llamadas |
+| `kpi_agentes(dept, fechas, status)` | Rendimiento por agente |
+| `kpi_llamadas_perdidas()` | Desglose de llamadas no contestadas |
+| `kpi_heatmap_horas(dept, fechas, agent)` | Mapa de calor hora × día |
+| `kpi_heatmap_por_status(dept, fechas, agent)` | Heatmap desglosado por estado |
+| `kpi_colas_detalle()` | Métricas de cola por mes |
+| `kpi_colas_espera(dept)` | Llamada con mayor tiempo de espera |
+| `kpi_colas_mensual(dept)` | Contestadas por mes (registros individuales) |
+| `kpi_sla_asa(dept)` | SLA 80/20 + ASA + P90 por cola |
+| `kpi_login_detalle(dept, fechas, agent)` | Login times + ocupación por agente/día |
+| `get_llamadas_detalle(...)` | Drill-down de llamadas individuales |
+
+---
+
+## Gestión de horarios (sin código)
+
+Para actualizar el horario de un agente, ejecutar en Supabase → SQL Editor:
+
+```sql
+UPDATE agent_schedules
+SET start_hour = 9, end_hour = 18, updated_at = NOW()
+WHERE agent_id = '127';  -- 127 = Rafael Silva Pulido
+```
+
+| agent_id | Agente | Horario actual |
+|---|---|---|
+| 127 | Rafael Silva Pulido | 7:00 – 16:00 |
+| 595 | Lina Serna Jacome | 7:00 – 16:00 |
+| 296 | Andres Felipe Torres Roa | 8:00 – 17:00 |
 
 ---
 
@@ -183,7 +267,13 @@ SUPABASE_URL = https://xxxxxxxx.supabase.co
 SUPABASE_KEY = service_role_key_aqui
 ```
 
-### 4. Primera ingesta
+### 4. Power Automate
+
+1. Crear Personal Access Token en GitHub (scope: `repo`)
+2. Crear flow: Outlook trigger → HTTP PUT a GitHub API
+3. Filtrar por remitente/asunto del email de 3CX
+
+### 5. Primera ingesta manual (opcional)
 
 ```bash
 # Colocar CSVs exportados desde 3CX en data/incoming/
@@ -197,19 +287,24 @@ git push
 
 ## Dashboard
 
-Repositorio separado: [`3cx-dashboard-web`](https://github.com/TU_USUARIO/3cx-dashboard-web)  
+Repositorio: [`3cx-dashboard-web`](https://github.com/TU_USUARIO/3cx-dashboard-web)  
 Deploy: Vercel Pro
 
-**Pestañas:**
+### Pestañas
 
 | Pestaña | Contenido |
 |---|---|
-| **Llamadas** | KPIs globales · Rendimiento por agente · Mapa de calor hora/día |
-| **Colas** | Contestadas · Colgó esperando · % Servicio · Promedio de habla |
-| **Login Times** | Hora de entrada · Hora de salida · Tiempo conectado · % Ocupación |
+| **Llamadas** | KPIs globales · Rendimiento por agente · Mapa de calor hora/día · Heatmap por estado |
+| **Colas** | Resumen por cola · SLA 80/20 · ASA · Llamadas contestadas MoM · Detalle mensual |
+| **Login Times** | Hora de entrada · Hora de salida · Tiempo conectado · % Ocupación · Alertas de overtime |
 
-**Filtros disponibles:** Departamento · Fecha · Estado de llamada · Agente  
-**Drill-down:** Clic en agente o celda del heatmap → panel lateral con llamadas subyacentes y paginación
+### Filtros disponibles
+
+- **Departamento** — Customer Service / Lender Review (cambia color del header)
+- **Período relativo** — Ayer · Esta semana · Últimas 2 semanas · Este mes · Últimos 3 meses · Este año
+- **Fecha manual** — Desde / Hasta
+- **Estado** — Answered · Unanswered · Waiting
+- **Agente** — filtrado por departamento seleccionado
 
 ---
 
@@ -222,15 +317,6 @@ Deploy: Vercel Pro
 | `agents_in_queue_stats` | 9 |
 | `queue_answered_calls` | 2,135 |
 | **Tiempo total de ejecución** | **~5 segundos (9 archivos)** |
-
----
-
-## Próximos pasos
-
-- [ ] Automatizar envío de CSVs con Power Automate (email → GitHub)
-- [ ] Autenticación con Supabase Auth o Vercel Password Protection
-- [ ] Conexión directa a la API REST de 3CX para ingesta en tiempo real
-- [ ] Análisis de sentiment con IA sobre transcripciones de llamadas
 
 ---
 
