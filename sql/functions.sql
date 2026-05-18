@@ -17,6 +17,8 @@ $$;
 
 -- ── kpi_llamadas: header KPI cards ───────────────────────────
 
+DROP FUNCTION IF EXISTS kpi_llamadas(text,date,date,text,text);
+
 CREATE OR REPLACE FUNCTION kpi_llamadas(
   dept         TEXT DEFAULT 'todos',
   fecha_inicio DATE DEFAULT NULL,
@@ -25,29 +27,57 @@ CREATE OR REPLACE FUNCTION kpi_llamadas(
   p_agent_id   TEXT DEFAULT NULL
 )
 RETURNS TABLE(
-  avg_real_min    numeric,
-  avg_real_mm_ss  text,
-  llamadas_reales bigint,
-  total_answered  bigint,
-  total_perdidas  bigint
+  avg_real_min     numeric,
+  avg_real_mm_ss   text,
+  llamadas_reales  bigint,
+  total_answered   bigint,
+  total_perdidas   bigint,
+  total_unanswered bigint,
+  waiting_cola     bigint,
+  waiting_agente   bigint
 )
 LANGUAGE sql SECURITY DEFINER AS $$
+  WITH base AS (
+    -- Llamadas con agente asignado (agent_id IS NOT NULL)
+    SELECT fc.talking_seconds, fc.status_id, fc.call_source
+    FROM fact_calls fc
+    JOIN dim_agent da ON fc.agent_id = da.agent_id
+    WHERE da.es_equipo = true
+      AND (dept = 'todos' OR da.departamento = dept)
+      AND (fecha_inicio IS NULL OR fc.date_key >= fecha_inicio)
+      AND (fecha_fin    IS NULL OR fc.date_key <= fecha_fin)
+      AND (p_status     IS NULL OR fc.status_id = p_status)
+      AND (p_agent_id   IS NULL OR fc.agent_id  = p_agent_id)
+
+    UNION ALL
+
+    -- Abandonos en cola: agent_id IS NULL, esperaban en queue WH Financial
+    -- Solo se incluyen cuando no hay filtro por agente específico
+    SELECT fc.talking_seconds, fc.status_id, fc.call_source
+    FROM fact_calls fc
+    WHERE fc.agent_id IS NULL
+      AND fc.call_source = 'Cola'
+      AND fc.status_id   = 'Waiting'
+      AND p_agent_id IS NULL
+      AND (dept = 'todos'
+        OR (dept = 'Lender Review'     AND fc.queue_id = '835')
+        OR (dept = 'Customer Service'  AND fc.queue_id = '840'))
+      AND (fecha_inicio IS NULL OR fc.date_key >= fecha_inicio)
+      AND (fecha_fin    IS NULL OR fc.date_key <= fecha_fin)
+      AND (p_status     IS NULL OR fc.status_id = p_status)
+  )
   SELECT
-    ROUND(AVG(fc.talking_seconds) FILTER (WHERE fc.talking_seconds >= 12) / 60.0, 1)::numeric,
-    LPAD((AVG(fc.talking_seconds) FILTER (WHERE fc.talking_seconds >= 12) / 60)::int::text, 2, '0')
+    ROUND(AVG(talking_seconds) FILTER (WHERE talking_seconds >= 12) / 60.0, 1)::numeric,
+    LPAD((AVG(talking_seconds) FILTER (WHERE talking_seconds >= 12) / 60)::int::text, 2, '0')
       || ':' ||
-      LPAD(MOD(ROUND(AVG(fc.talking_seconds) FILTER (WHERE fc.talking_seconds >= 12))::int, 60)::text, 2, '0'),
-    COUNT(*) FILTER (WHERE fc.talking_seconds >= 12),
-    COUNT(*) FILTER (WHERE fc.status_id = 'Answered'),
-    COUNT(*) FILTER (WHERE fc.status_id NOT IN ('Answered','Transferred'))
-  FROM fact_calls fc
-  JOIN dim_agent da ON fc.agent_id = da.agent_id
-  WHERE da.es_equipo = true
-    AND (dept = 'todos' OR da.departamento = dept)
-    AND (fecha_inicio IS NULL OR fc.date_key >= fecha_inicio)
-    AND (fecha_fin   IS NULL OR fc.date_key <= fecha_fin)
-    AND (p_status    IS NULL OR fc.status_id = p_status)
-    AND (p_agent_id  IS NULL OR fc.agent_id  = p_agent_id);
+      LPAD(MOD(ROUND(AVG(talking_seconds) FILTER (WHERE talking_seconds >= 12))::int, 60)::text, 2, '0'),
+    COUNT(*) FILTER (WHERE talking_seconds >= 12),
+    COUNT(*) FILTER (WHERE status_id = 'Answered'),
+    COUNT(*) FILTER (WHERE status_id NOT IN ('Answered','Transferred')),
+    COUNT(*) FILTER (WHERE status_id = 'Unanswered'),
+    COUNT(*) FILTER (WHERE status_id = 'Waiting' AND call_source = 'Cola'),
+    COUNT(*) FILTER (WHERE status_id = 'Waiting' AND (call_source = 'Directo' OR call_source IS NULL))
+  FROM base;
 $$;
 
 -- ── kpi_agentes: per-agent performance table ─────────────────
@@ -118,11 +148,14 @@ $$;
 
 -- ── kpi_heatmap_horas: calls heatmap (hour x day) ────────────
 
+DROP FUNCTION IF EXISTS kpi_heatmap_horas(text,date,date,text);
+
 CREATE OR REPLACE FUNCTION kpi_heatmap_horas(
   dept         TEXT DEFAULT 'todos',
   fecha_inicio DATE DEFAULT NULL,
   fecha_fin    DATE DEFAULT NULL,
-  p_agent_id   TEXT DEFAULT NULL
+  p_agent_id   TEXT DEFAULT NULL,
+  p_status     TEXT DEFAULT NULL
 )
 RETURNS TABLE(hora int, dia int, total bigint)
 LANGUAGE sql SECURITY DEFINER AS $$
@@ -137,6 +170,7 @@ LANGUAGE sql SECURITY DEFINER AS $$
     AND (fecha_inicio IS NULL OR fc.date_key >= fecha_inicio)
     AND (fecha_fin   IS NULL OR fc.date_key <= fecha_fin)
     AND (p_agent_id  IS NULL OR fc.agent_id  = p_agent_id)
+    AND (p_status    IS NULL OR fc.status_id = p_status)
   GROUP BY 1, 2;
 $$;
 
