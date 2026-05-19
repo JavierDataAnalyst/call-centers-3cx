@@ -195,6 +195,7 @@ export default function Dashboard() {
     setFechaFin(fin);
   }
   const [status,     setStatus]     = useState("");
+  const [direction,  setDirection]  = useState("");
   const [agenteId,   setAgenteId]   = useState("");
   const [agentesLista, setAgentesLista] = useState<AgenteItem[]>([]);
 
@@ -215,6 +216,7 @@ export default function Dashboard() {
   const fi = fechaInicio || null;
   const ff = fechaFin    || null;
   const st = status      || null;
+  const di = direction   || null;
   const ai = agenteId    || null;
 
   useEffect(() => {
@@ -226,11 +228,11 @@ export default function Dashboard() {
     setLoading(true);
     if (tab === "llamadas") {
       const [k, a, p, h, hs] = await Promise.all([
-        supabase.rpc("kpi_llamadas",           { dept, fecha_inicio: fi, fecha_fin: ff, p_status: st, p_agent_id: ai }),
-        supabase.rpc("kpi_agentes",            { dept, fecha_inicio: fi, fecha_fin: ff, p_status: st }),
+        supabase.rpc("kpi_llamadas",           { dept, fecha_inicio: fi, fecha_fin: ff, p_status: st, p_agent_id: ai, p_direction: di }),
+        supabase.rpc("kpi_agentes",            { dept, fecha_inicio: fi, fecha_fin: ff, p_status: st, p_direction: di }),
         supabase.rpc("kpi_llamadas_perdidas"),
-        supabase.rpc("kpi_heatmap_horas",      { dept, fecha_inicio: fi, fecha_fin: ff, p_agent_id: ai, p_status: st }),
-        supabase.rpc("kpi_heatmap_por_status", { dept, fecha_inicio: fi, fecha_fin: ff, p_agent_id: ai }),
+        supabase.rpc("kpi_heatmap_horas",      { dept, fecha_inicio: fi, fecha_fin: ff, p_agent_id: ai, p_status: st, p_direction: di }),
+        supabase.rpc("kpi_heatmap_por_status", { dept, fecha_inicio: fi, fecha_fin: ff, p_agent_id: ai, p_direction: di }),
       ]);
       setKpi(k.data?.[0] ?? null);
       const todosAgentes: Agente[] = a.data ?? [];
@@ -255,7 +257,7 @@ export default function Dashboard() {
     }
     setLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, dept, fechaInicio, fechaFin, status, agenteId]);
+  }, [tab, dept, fechaInicio, fechaFin, status, direction, agenteId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -340,6 +342,21 @@ export default function Dashboard() {
             ))}
           </select>
 
+          <select value={direction} onChange={e => setDirection(e.target.value)}
+            className="border border-white/30 bg-white/10 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-white/50"
+            style={{colorScheme:"dark"}}>
+            {[
+              { value: "",         label: "Todas las direcciones" },
+              { value: "Inbound",  label: "Inbound — Entrantes" },
+              { value: "Outbound", label: "Outbound — Salientes" },
+              { value: "Internal", label: "Internal — Internas" },
+            ].map(d => (
+              <option key={d.value} value={d.value} style={{color:"#111",background:"#fff"}}>
+                {d.label}
+              </option>
+            ))}
+          </select>
+
           <select value={agenteId} onChange={e => setAgenteId(e.target.value)}
             className="border border-white/30 bg-white/10 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-white/50"
             style={{colorScheme:"dark"}}>
@@ -390,6 +407,7 @@ export default function Dashboard() {
             fechaInicio={fi ?? undefined}
             fechaFin={ff ?? undefined}
             pStatus={st ?? undefined}
+            pDirection={di ?? undefined}
             onClose={() => setDrill(null)}
           />
         )}
@@ -1164,9 +1182,9 @@ function TabLogin({ login, schedules }: { login: LoginRow[]; schedules: AgentSch
 }
 
 /* ── Drill Modal ───────────────────────────────────────────────────────── */
-function DrillModal({ titulo, dept, agentId, hora, dia, fechaInicio, fechaFin, pStatus, onClose }: {
+function DrillModal({ titulo, dept, agentId, hora, dia, fechaInicio, fechaFin, pStatus, pDirection, onClose }: {
   titulo: string; dept: Dept; agentId?: string; hora?: number; dia?: number;
-  fechaInicio?: string; fechaFin?: string; pStatus?: string; onClose: () => void;
+  fechaInicio?: string; fechaFin?: string; pStatus?: string; pDirection?: string; onClose: () => void;
 }) {
   const [rows,    setRows]    = useState<Llamada[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1188,9 +1206,10 @@ function DrillModal({ titulo, dept, agentId, hora, dia, fechaInicio, fechaFin, p
         fecha_fin:    fechaFin   ?? null,
         p_limit:      LIMIT,
         p_offset:     offset,
-        p_hora:       hora    ?? null,
-        p_dia:        dia     ?? null,
-        p_status:     pStatus ?? null,
+        p_hora:       hora       ?? null,
+        p_dia:        dia        ?? null,
+        p_status:     pStatus    ?? null,
+        p_direction:  pDirection ?? null,
       });
       const items = data ?? [];
       setRows(prev => offset === 0 ? items : [...prev, ...items]);

@@ -24,7 +24,8 @@ CREATE OR REPLACE FUNCTION kpi_llamadas(
   fecha_inicio DATE DEFAULT NULL,
   fecha_fin    DATE DEFAULT NULL,
   p_status     TEXT DEFAULT NULL,
-  p_agent_id   TEXT DEFAULT NULL
+  p_agent_id   TEXT DEFAULT NULL,
+  p_direction  TEXT DEFAULT NULL
 )
 RETURNS TABLE(
   avg_real_min     numeric,
@@ -38,30 +39,31 @@ RETURNS TABLE(
 )
 LANGUAGE sql SECURITY DEFINER AS $$
   WITH base AS (
-    -- Llamadas con agente asignado (agent_id IS NOT NULL)
+    -- Llamadas con agente asignado
     SELECT fc.talking_seconds, fc.status_id, fc.call_source
     FROM fact_calls fc
     JOIN dim_agent da ON fc.agent_id = da.agent_id
     WHERE da.es_equipo = true
-      AND (dept = 'todos' OR da.departamento = dept)
-      AND (fecha_inicio IS NULL OR fc.date_key >= fecha_inicio)
-      AND (fecha_fin    IS NULL OR fc.date_key <= fecha_fin)
-      AND (p_status     IS NULL OR fc.status_id = p_status)
-      AND (p_agent_id   IS NULL OR fc.agent_id  = p_agent_id)
+      AND (dept        = 'todos' OR da.departamento = dept)
+      AND (fecha_inicio IS NULL  OR fc.date_key  >= fecha_inicio)
+      AND (fecha_fin    IS NULL  OR fc.date_key  <= fecha_fin)
+      AND (p_status     IS NULL  OR fc.status_id  = p_status)
+      AND (p_agent_id   IS NULL  OR fc.agent_id   = p_agent_id)
+      AND (p_direction  IS NULL  OR fc.direction_id = p_direction)
 
     UNION ALL
 
-    -- Abandonos en cola: agent_id IS NULL, esperaban en queue WH Financial
-    -- Solo se incluyen cuando no hay filtro por agente específico
+    -- Abandonos en cola (agent_id IS NULL) — siempre Inbound
     SELECT fc.talking_seconds, fc.status_id, fc.call_source
     FROM fact_calls fc
-    WHERE fc.agent_id IS NULL
+    WHERE fc.agent_id  IS NULL
       AND fc.call_source = 'Cola'
       AND fc.status_id   = 'Waiting'
-      AND p_agent_id IS NULL
+      AND p_agent_id  IS NULL
+      AND (p_direction IS NULL OR p_direction = 'Inbound')
       AND (dept = 'todos'
-        OR (dept = 'Lender Review'     AND fc.queue_id = '835')
-        OR (dept = 'Customer Service'  AND fc.queue_id = '840'))
+        OR (dept = 'Lender Review'    AND fc.queue_id = '835')
+        OR (dept = 'Customer Service' AND fc.queue_id = '840'))
       AND (fecha_inicio IS NULL OR fc.date_key >= fecha_inicio)
       AND (fecha_fin    IS NULL OR fc.date_key <= fecha_fin)
       AND (p_status     IS NULL OR fc.status_id = p_status)
@@ -82,11 +84,14 @@ $$;
 
 -- ── kpi_agentes: per-agent performance table ─────────────────
 
+DROP FUNCTION IF EXISTS kpi_agentes(text,date,date,text);
+
 CREATE OR REPLACE FUNCTION kpi_agentes(
   dept         TEXT DEFAULT 'todos',
   fecha_inicio DATE DEFAULT NULL,
   fecha_fin    DATE DEFAULT NULL,
-  p_status     TEXT DEFAULT NULL
+  p_status     TEXT DEFAULT NULL,
+  p_direction  TEXT DEFAULT NULL
 )
 RETURNS TABLE(
   agente          text,
@@ -109,10 +114,11 @@ LANGUAGE sql SECURITY DEFINER AS $$
   FROM fact_calls fc
   JOIN dim_agent da ON fc.agent_id = da.agent_id
   WHERE da.es_equipo = true
-    AND (dept = 'todos' OR da.departamento = dept)
-    AND (fecha_inicio IS NULL OR fc.date_key >= fecha_inicio)
-    AND (fecha_fin   IS NULL OR fc.date_key <= fecha_fin)
-    AND (p_status    IS NULL OR fc.status_id = p_status)
+    AND (dept        = 'todos' OR da.departamento  = dept)
+    AND (fecha_inicio IS NULL  OR fc.date_key      >= fecha_inicio)
+    AND (fecha_fin    IS NULL  OR fc.date_key      <= fecha_fin)
+    AND (p_status     IS NULL  OR fc.status_id      = p_status)
+    AND (p_direction  IS NULL  OR fc.direction_id   = p_direction)
   GROUP BY da.nombre, da.agent_id, da.departamento
   ORDER BY llamadas_reales DESC;
 $$;
@@ -148,6 +154,7 @@ $$;
 
 -- ── kpi_heatmap_horas: calls heatmap (hour x day) ────────────
 
+DROP FUNCTION IF EXISTS kpi_heatmap_horas(text,date,date,text,text);
 DROP FUNCTION IF EXISTS kpi_heatmap_horas(text,date,date,text);
 
 CREATE OR REPLACE FUNCTION kpi_heatmap_horas(
@@ -155,7 +162,8 @@ CREATE OR REPLACE FUNCTION kpi_heatmap_horas(
   fecha_inicio DATE DEFAULT NULL,
   fecha_fin    DATE DEFAULT NULL,
   p_agent_id   TEXT DEFAULT NULL,
-  p_status     TEXT DEFAULT NULL
+  p_status     TEXT DEFAULT NULL,
+  p_direction  TEXT DEFAULT NULL
 )
 RETURNS TABLE(hora int, dia int, total bigint)
 LANGUAGE sql SECURITY DEFINER AS $$
@@ -166,11 +174,12 @@ LANGUAGE sql SECURITY DEFINER AS $$
   FROM fact_calls fc
   JOIN dim_agent da ON fc.agent_id = da.agent_id
   WHERE da.es_equipo = true
-    AND (dept = 'todos' OR da.departamento = dept)
-    AND (fecha_inicio IS NULL OR fc.date_key >= fecha_inicio)
-    AND (fecha_fin   IS NULL OR fc.date_key <= fecha_fin)
-    AND (p_agent_id  IS NULL OR fc.agent_id  = p_agent_id)
-    AND (p_status    IS NULL OR fc.status_id = p_status)
+    AND (dept        = 'todos' OR da.departamento = dept)
+    AND (fecha_inicio IS NULL  OR fc.date_key    >= fecha_inicio)
+    AND (fecha_fin    IS NULL  OR fc.date_key    <= fecha_fin)
+    AND (p_agent_id   IS NULL  OR fc.agent_id     = p_agent_id)
+    AND (p_status     IS NULL  OR fc.status_id    = p_status)
+    AND (p_direction  IS NULL  OR fc.direction_id = p_direction)
   GROUP BY 1, 2;
 $$;
 
@@ -236,21 +245,24 @@ LANGUAGE sql SECURITY DEFINER AS $$
     GROUP BY agent_id, date_key
   ) fc_agg ON fc_agg.agent_id = alh.agent_id AND fc_agg.date_key = alh.date_key
   WHERE da.es_equipo = true
-    AND (dept = 'todos' OR da.departamento = dept)
-    AND (fecha_inicio IS NULL OR alh.date_key >= fecha_inicio)
-    AND (fecha_fin   IS NULL OR alh.date_key <= fecha_fin)
-    AND (p_agent_id  IS NULL OR alh.agent_id  = p_agent_id)
+    AND (dept        = 'todos' OR da.departamento = dept)
+    AND (fecha_inicio IS NULL  OR alh.date_key   >= fecha_inicio)
+    AND (fecha_fin    IS NULL  OR alh.date_key   <= fecha_fin)
+    AND (p_agent_id   IS NULL  OR alh.agent_id    = p_agent_id)
   GROUP BY da.nombre, da.departamento, alh.date_key
   ORDER BY alh.date_key DESC, da.nombre;
 $$;
 
 -- ── kpi_heatmap_por_status: calls by hour/day/status ────────
 
+DROP FUNCTION IF EXISTS kpi_heatmap_por_status(text,date,date,text);
+
 CREATE OR REPLACE FUNCTION kpi_heatmap_por_status(
   dept         TEXT DEFAULT 'todos',
   fecha_inicio DATE DEFAULT NULL,
   fecha_fin    DATE DEFAULT NULL,
-  p_agent_id   TEXT DEFAULT NULL
+  p_agent_id   TEXT DEFAULT NULL,
+  p_direction  TEXT DEFAULT NULL
 )
 RETURNS TABLE(hora int, dia int, status_id text, total bigint)
 LANGUAGE sql SECURITY DEFINER AS $$
@@ -262,10 +274,11 @@ LANGUAGE sql SECURITY DEFINER AS $$
   FROM fact_calls fc
   JOIN dim_agent da ON fc.agent_id = da.agent_id
   WHERE da.es_equipo = true
-    AND (dept = 'todos' OR da.departamento = dept)
-    AND (fecha_inicio IS NULL OR fc.date_key >= fecha_inicio)
-    AND (fecha_fin   IS NULL OR fc.date_key <= fecha_fin)
-    AND (p_agent_id  IS NULL OR fc.agent_id  = p_agent_id)
+    AND (dept        = 'todos' OR da.departamento = dept)
+    AND (fecha_inicio IS NULL  OR fc.date_key    >= fecha_inicio)
+    AND (fecha_fin    IS NULL  OR fc.date_key    <= fecha_fin)
+    AND (p_agent_id   IS NULL  OR fc.agent_id     = p_agent_id)
+    AND (p_direction  IS NULL  OR fc.direction_id = p_direction)
   GROUP BY 1, 2, 3;
 $$;
 
@@ -273,7 +286,7 @@ $$;
 
 DROP FUNCTION IF EXISTS kpi_sla_asa();
 
-CREATE OR REPLACE FUNCTION kpi_sla_asa()
+CREATE OR REPLACE FUNCTION kpi_sla_asa(p_dept TEXT DEFAULT 'todos')
 RETURNS TABLE(
   cola          text,
   total_llamadas bigint,
@@ -300,6 +313,8 @@ $$;
 
 -- ── get_llamadas_detalle: drill-down call records ─────────────
 
+DROP FUNCTION IF EXISTS get_llamadas_detalle(text,text,date,date,int,int,int,int,text);
+
 CREATE OR REPLACE FUNCTION get_llamadas_detalle(
   dept         TEXT    DEFAULT 'todos',
   p_agent_id   TEXT    DEFAULT NULL,
@@ -309,7 +324,8 @@ CREATE OR REPLACE FUNCTION get_llamadas_detalle(
   p_offset     INT     DEFAULT 0,
   p_hora       INT     DEFAULT NULL,
   p_dia        INT     DEFAULT NULL,
-  p_status     TEXT    DEFAULT NULL
+  p_status     TEXT    DEFAULT NULL,
+  p_direction  TEXT    DEFAULT NULL
 )
 RETURNS TABLE(
   call_id         text,
@@ -338,13 +354,14 @@ LANGUAGE sql SECURITY DEFINER AS $$
   FROM fact_calls fc
   JOIN dim_agent da ON fc.agent_id = da.agent_id
   WHERE da.es_equipo = true
-    AND (dept = 'todos' OR da.departamento = dept)
-    AND (p_agent_id   IS NULL OR fc.agent_id  = p_agent_id)
-    AND (fecha_inicio IS NULL OR fc.date_key  >= fecha_inicio)
-    AND (fecha_fin    IS NULL OR fc.date_key  <= fecha_fin)
-    AND (p_status     IS NULL OR fc.status_id  = p_status)
-    AND (p_hora       IS NULL OR EXTRACT(HOUR FROM fc.call_time AT TIME ZONE 'UTC')::int = p_hora)
-    AND (p_dia        IS NULL OR EXTRACT(DOW  FROM fc.call_time AT TIME ZONE 'UTC')::int = p_dia)
+    AND (dept        = 'todos' OR da.departamento = dept)
+    AND (p_agent_id   IS NULL  OR fc.agent_id    = p_agent_id)
+    AND (fecha_inicio IS NULL  OR fc.date_key    >= fecha_inicio)
+    AND (fecha_fin    IS NULL  OR fc.date_key    <= fecha_fin)
+    AND (p_status     IS NULL  OR fc.status_id   = p_status)
+    AND (p_direction  IS NULL  OR fc.direction_id = p_direction)
+    AND (p_hora       IS NULL  OR EXTRACT(HOUR FROM fc.call_time AT TIME ZONE 'UTC')::int = p_hora)
+    AND (p_dia        IS NULL  OR EXTRACT(DOW  FROM fc.call_time AT TIME ZONE 'UTC')::int = p_dia)
   ORDER BY fc.call_time DESC
   LIMIT p_limit OFFSET p_offset;
 $$;
