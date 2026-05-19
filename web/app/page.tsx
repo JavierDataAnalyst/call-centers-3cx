@@ -346,6 +346,21 @@ export default function Dashboard() {
             className="border border-white/30 bg-white/10 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-white/50"
             style={{colorScheme:"dark"}}>
             {[
+              { value: "",         label: "Inbound + Outbound" },
+              { value: "Inbound",  label: "↙ Inbound" },
+              { value: "Outbound", label: "↗ Outbound" },
+              { value: "Internal", label: "⇄ Internal" },
+            ].map(d => (
+              <option key={d.value} value={d.value} style={{color:"#111",background:"#fff"}}>
+                {d.label}
+              </option>
+            ))}
+          </select>
+
+          <select value={direction} onChange={e => setDirection(e.target.value)}
+            className="border border-white/30 bg-white/10 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-white/50"
+            style={{colorScheme:"dark"}}>
+            {[
               { value: "",         label: "Todas las direcciones" },
               { value: "Inbound",  label: "Inbound — Entrantes" },
               { value: "Outbound", label: "Outbound — Salientes" },
