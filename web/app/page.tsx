@@ -18,6 +18,7 @@ interface KpiLlamadas {
   total_unanswered: number;
   waiting_cola: number;
   waiting_agente: number;
+  cola_ignorada: number;
 }
 interface Agente {
   agente: string;
@@ -597,13 +598,16 @@ function TabLlamadas({ kpi, agentes, perdidas, heat, heatStatus, dept, onDrill }
         <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">
           Resumen — {dept === "todos" ? "Todos los equipos" : dept}
         </h2>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
-          <KpiCard label="Contestadas"      value={kpi?.total_answered?.toLocaleString() ?? "—"}    sub="Answered" color="#16a34a" />
-          <KpiCard label="No Contestadas"   value={kpi?.total_unanswered?.toLocaleString() ?? "0"} sub="Unanswered" color="#ef4444" />
-          <KpiCard label="Abandonos en Cola" value={kpi?.waiting_cola?.toLocaleString() ?? "0"}     sub="Colgaron esperando en queue" color="#f59e0b" />
-          <KpiCard label="Sin Respuesta Agente" value={kpi?.waiting_agente?.toLocaleString() ?? "0"} sub="Waiting directo a agente" color="#a78bfa" />
-          <KpiCard label="Tiempo Promedio"  value={kpi?.avg_real_mm_ss ?? "—"}                      sub="llamadas ≥ 12 seg" />
-          <KpiCard label="Llamadas Reales"  value={kpi?.llamadas_reales?.toLocaleString() ?? "—"}   sub="duración ≥ 12 seg" />
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+          <KpiCard label="Contestadas"       value={kpi?.total_answered?.toLocaleString() ?? "—"}     sub="Answered" color="#16a34a" />
+          <KpiCard label="No Contestadas"    value={kpi?.total_unanswered?.toLocaleString() ?? "0"}   sub="Unanswered" color="#ef4444" />
+          <KpiCard label="Tiempo Promedio"   value={kpi?.avg_real_mm_ss ?? "—"}                       sub="llamadas ≥ 12 seg" />
+          <KpiCard label="Llamadas Reales"   value={kpi?.llamadas_reales?.toLocaleString() ?? "—"}    sub="duración ≥ 12 seg" />
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 gap-4 mt-3">
+          <KpiCard label="Abandonos en Cola"    value={kpi?.waiting_cola?.toLocaleString() ?? "0"}     sub="Cliente colgó esperando en queue" color="#f59e0b" />
+          <KpiCard label="Cola Ignorada"        value={kpi?.cola_ignorada?.toLocaleString() ?? "0"}    sub="Agente no contestó cuando la cola lo llamó" color="#dc2626" />
+          <KpiCard label="Sin Respuesta Agente" value={kpi?.waiting_agente?.toLocaleString() ?? "0"}   sub="Waiting directo a agente" color="#a78bfa" />
         </div>
       </section>
 
