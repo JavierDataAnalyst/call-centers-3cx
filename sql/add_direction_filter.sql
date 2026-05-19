@@ -96,14 +96,17 @@ RETURNS TABLE(
 LANGUAGE sql SECURITY DEFINER AS
 $func$
   SELECT
-    da.nombre, da.agent_id, da.departamento,
-    ROUND(AVG(fc.talking_seconds) FILTER (WHERE fc.talking_seconds >= 12) / 60.0, 1)::numeric,
+    da.nombre                                                                          AS agente,
+    da.agent_id,
+    da.departamento,
+    ROUND(AVG(fc.talking_seconds) FILTER (WHERE fc.talking_seconds >= 12) / 60.0, 1)::numeric
+                                                                                       AS avg_real_min,
     LPAD(
       (AVG(fc.talking_seconds) FILTER (WHERE fc.talking_seconds >= 12) / 60)::int::text, 2, '0'
     ) || ':' || LPAD(
       MOD(ROUND(AVG(fc.talking_seconds) FILTER (WHERE fc.talking_seconds >= 12))::int, 60)::text, 2, '0'
-    ),
-    COUNT(*) FILTER (WHERE fc.talking_seconds >= 12)
+    )                                                                                  AS avg_real_mm_ss,
+    COUNT(*) FILTER (WHERE fc.talking_seconds >= 12)                                  AS llamadas_reales
   FROM fact_calls fc
   JOIN dim_agent da ON fc.agent_id = da.agent_id
   WHERE da.es_equipo = true
