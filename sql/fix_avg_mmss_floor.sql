@@ -1,7 +1,5 @@
 -- ============================================================
--- FIX: avg_real_mm_ss usaba ::int (redondea) en lugar de FLOOR (trunca)
--- Ejemplo: 221 seg → 3 min 41 seg → debe ser "03:41" no "04:41"
--- Aplica a kpi_llamadas y kpi_agentes
+-- FIX: avg_real_mm_ss usa FLOOR; todo el agregado en CTE "agg"
 -- ============================================================
 
 -- ── 1. kpi_llamadas ──────────────────────────────────────────
@@ -32,6 +30,7 @@ RETURNS TABLE(
 LANGUAGE sql SECURITY DEFINER AS
 $func$
   WITH base AS (
+    -- Outbound e Internal con agente conocido
     SELECT fc.talking_seconds, fc.status_id, fc.call_source, fc.direction_id
     FROM fact_calls fc
     JOIN dim_agent da ON fc.agent_id = da.agent_id
@@ -46,6 +45,7 @@ $func$
 
     UNION ALL
 
+    -- Inbound (agent_id = NULL, caller externo)
     SELECT fc.talking_seconds, fc.status_id, fc.call_source, fc.direction_id
     FROM fact_calls fc
     WHERE fc.direction_id = 'Inbound'
@@ -61,8 +61,15 @@ $func$
       AND (fecha_fin    IS NULL OR fc.date_key <= fecha_fin)
       AND (p_status     IS NULL OR fc.status_id = p_status)
   ),
-  stats AS (
-    SELECT AVG(talking_seconds) FILTER (WHERE talking_seconds >= 12) AS avg_sec
+  agg AS (
+    SELECT
+      AVG(talking_seconds)  FILTER (WHERE talking_seconds >= 12)                        AS avg_sec,
+      COUNT(*)              FILTER (WHERE talking_seconds >= 12)                        AS llamadas_reales,
+      COUNT(*)              FILTER (WHERE status_id = 'Answered')                       AS total_answered,
+      COUNT(*)              FILTER (WHERE status_id NOT IN ('Answered','Transferred'))  AS total_perdidas,
+      COUNT(*)              FILTER (WHERE status_id = 'Unanswered')                     AS total_unanswered,
+      COUNT(*)              FILTER (WHERE status_id = 'Waiting' AND call_source = 'Cola')                       AS waiting_cola,
+      COUNT(*)              FILTER (WHERE status_id = 'Waiting' AND (call_source = 'Directo' OR call_source IS NULL)) AS waiting_agente
     FROM base
   )
   SELECT
@@ -70,13 +77,13 @@ $func$
     LPAD(FLOOR(avg_sec / 60.0)::int::text, 2, '0')
       || ':' ||
       LPAD(MOD(FLOOR(avg_sec)::int, 60)::text, 2, '0'),
-    COUNT(*) FILTER (WHERE talking_seconds >= 12),
-    COUNT(*) FILTER (WHERE status_id = 'Answered'),
-    COUNT(*) FILTER (WHERE status_id NOT IN ('Answered','Transferred')),
-    COUNT(*) FILTER (WHERE status_id = 'Unanswered'),
-    COUNT(*) FILTER (WHERE status_id = 'Waiting' AND call_source = 'Cola'),
-    COUNT(*) FILTER (WHERE status_id = 'Waiting' AND (call_source = 'Directo' OR call_source IS NULL))
-  FROM base, stats;
+    llamadas_reales,
+    total_answered,
+    total_perdidas,
+    total_unanswered,
+    waiting_cola,
+    waiting_agente
+  FROM agg;
 $func$;
 
 -- ── 2. kpi_agentes ───────────────────────────────────────────
@@ -99,16 +106,16 @@ RETURNS TABLE(
 LANGUAGE sql SECURITY DEFINER AS
 $func$
   SELECT
-    da.nombre                                                                           AS agente,
+    da.nombre                                                                            AS agente,
     da.agent_id,
     da.departamento,
     ROUND(AVG(fc.talking_seconds) FILTER (WHERE fc.talking_seconds >= 12) / 60.0, 1)::numeric
-                                                                                        AS avg_real_min,
+                                                                                         AS avg_real_min,
     LPAD(FLOOR(AVG(fc.talking_seconds) FILTER (WHERE fc.talking_seconds >= 12) / 60.0)::int::text, 2, '0')
       || ':' ||
       LPAD(MOD(FLOOR(AVG(fc.talking_seconds) FILTER (WHERE fc.talking_seconds >= 12))::int, 60)::text, 2, '0')
-                                                                                        AS avg_real_mm_ss,
-    COUNT(*) FILTER (WHERE fc.talking_seconds >= 12)                                   AS llamadas_reales
+                                                                                         AS avg_real_mm_ss,
+    COUNT(*) FILTER (WHERE fc.talking_seconds >= 12)                                    AS llamadas_reales
   FROM fact_calls fc
   JOIN dim_agent da ON fc.agent_id = da.agent_id
   WHERE da.es_equipo = true
@@ -122,12 +129,6 @@ $func$
 $func$;
 
 -- ── Verificación ─────────────────────────────────────────────
--- avg_real_min y avg_real_mm_ss deben coincidir ahora
--- Ej: 3.7 min → "03:41"  |  4.7 min → "04:41"
-SELECT
-  ROUND(avg_sec / 60.0, 1)                                AS avg_min,
-  LPAD(FLOOR(avg_sec / 60.0)::int::text, 2, '0') || ':' ||
-  LPAD(MOD(FLOOR(avg_sec)::int, 60)::text,        2, '0') AS mm_ss
-FROM (SELECT 221.0 AS avg_sec) t;   -- debe dar 3.7 | 03:41
-
+-- Outbound debe mostrar avg_real_min y avg_real_mm_ss consistentes
+-- Ej: 3.7 min → "03:41"
 SELECT * FROM kpi_llamadas(p_direction => 'Outbound');
