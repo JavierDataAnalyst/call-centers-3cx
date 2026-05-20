@@ -284,29 +284,43 @@ $$;
 
 -- ── kpi_sla_asa: SLA % + Average Speed of Answer per queue ───
 
+DROP FUNCTION IF EXISTS kpi_sla_asa(text);
+DROP FUNCTION IF EXISTS kpi_sla_asa(text, integer);
 DROP FUNCTION IF EXISTS kpi_sla_asa();
 
-CREATE OR REPLACE FUNCTION kpi_sla_asa(p_dept TEXT DEFAULT 'todos')
+CREATE OR REPLACE FUNCTION kpi_sla_asa(
+  p_dept        TEXT    DEFAULT 'todos',
+  p_sla_seconds INTEGER DEFAULT 20        -- umbral SLA configurable (seg en cola)
+)
 RETURNS TABLE(
-  cola          text,
+  cola           text,
   total_llamadas bigint,
-  dentro_sla    bigint,
-  pct_sla       numeric,
-  asa_avg_sec   numeric,
-  asa_med_sec   numeric,
-  asa_p90_sec   numeric
+  dentro_sla     bigint,
+  pct_sla        numeric,
+  asa_avg_sec    numeric,
+  asa_med_sec    numeric,
+  asa_p90_sec    numeric,
+  sla_threshold  integer
 )
 LANGUAGE sql SECURITY DEFINER AS $$
   SELECT
     dq.nombre,
     COUNT(*),
-    COUNT(*) FILTER (WHERE qac.ringing_seconds <= 20),
-    ROUND(COUNT(*) FILTER (WHERE qac.ringing_seconds <= 20) * 100.0 / NULLIF(COUNT(*), 0), 1),
+    COUNT(*) FILTER (WHERE qac.ringing_seconds <= p_sla_seconds),
+    ROUND(COUNT(*) FILTER (WHERE qac.ringing_seconds <= p_sla_seconds) * 100.0
+          / NULLIF(COUNT(*), 0), 1),
     ROUND(AVG(qac.ringing_seconds)::numeric, 0),
     ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qac.ringing_seconds)::numeric, 0),
-    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qac.ringing_seconds)::numeric, 0)
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qac.ringing_seconds)::numeric, 0),
+    p_sla_seconds
   FROM queue_answered_calls qac
   JOIN dim_queue dq ON dq.queue_id = qac.queue_id
+  WHERE (p_dept = 'todos' OR dq.nombre ILIKE
+         CASE p_dept
+           WHEN 'Customer Service' THEN '%servicio%'
+           WHEN 'Lender Review'    THEN '%calidad%'
+           ELSE '%'
+         END)
   GROUP BY dq.nombre
   ORDER BY 1;
 $$;
