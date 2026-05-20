@@ -106,32 +106,72 @@ def queue_tipo(nombre: str) -> str:
 
 
 def date_from_filename(path: Path) -> str:
-    """Extract YYYY-MM-DD from filename, else today."""
+    """Extract YYYY-MM-DD from filename.
+    Falls back to yesterday for 3CX 'Yesterday' native reports that
+    don't embed the date in the filename."""
+    from datetime import timedelta
     m = re.search(r"(\d{4}-\d{2}-\d{2})", path.stem)
-    return m.group(1) if m else date.today().isoformat()
+    if m:
+        return m.group(1)
+    # 3CX native reports (e.g. CallHistoryYesterday_2005_xxx.csv) cover yesterday
+    if "yesterday" in path.stem.lower():
+        return (date.today() - timedelta(days=1)).isoformat()
+    return date.today().isoformat()
 
 
 def detect_type(path: Path, headers: list) -> str:
-    """Detect report type from filename keywords and/or header names."""
+    """Detect report type from filename keywords and/or CSV header names.
+
+    Supports both custom naming (call_reports_YYYY-MM-DD.csv) and
+    3CX native naming (CallHistoryYesterday_DDMM_xxx.csv).
+    """
     name = path.stem.lower()
     h = [x.strip().lower() for x in headers]
 
-    if "call_report" in name or ("call id" in h and "from" in h and "to" in h):
+    # ── Call reports ──────────────────────────────────────────────────────
+    if ("call_report" in name or "callhistory" in name or "call history" in name
+            or ("call id" in h and "from" in h and "to" in h)):
         return "call_reports"
-    if "agent_login" in name or ("logged in" in h and "logged out" in h):
+
+    # ── Agent login ───────────────────────────────────────────────────────
+    if ("agent_login" in name or "agentlogin" in name or "loginlogout" in name
+            or ("logged in" in h and "logged out" in h)):
         return "agent_login_history"
-    if "agents_in_queue" in name or ("ring time total" in h and "agent" in h and "queue" in h):
+
+    # ── Agents in queue ───────────────────────────────────────────────────
+    if ("agents_in_queue" in name or "agentinqueue" in name
+            or ("ring time total" in h and "agent" in h and "queue" in h)):
         return "agents_in_queue_statistics"
-    if "team_queue_general" in name or ("agents in team" in h):
+
+    # ── Team queue general ────────────────────────────────────────────────
+    if ("team_queue_general" in name or "teamqueue" in name
+            or "agents in team" in h):
         return "team_queue_general_statistics"
-    if "detailed_queue" in name or ("calls abandoned" in h):
+
+    # ── Detailed queue ────────────────────────────────────────────────────
+    if ("detailed_queue" in name or "detailedqueue" in name
+            or "calls abandoned" in h):
         return "detailed_queue_statistics"
-    if "queue_performance" in name or ("extension polls" in h):
+
+    # ── Queue performance ─────────────────────────────────────────────────
+    if ("queue_performance" in name or "queueperformance" in name
+            or "extension polls" in h):
         return "queue_performance"
-    if "queue_answered" in name or ("answer time" in h and "destination" in h):
+
+    # ── Queue answered calls ──────────────────────────────────────────────
+    if ("queue_answered" in name or "queueanswered" in name
+            or ("answer time" in h and "destination" in h)):
         return "queue_answered_calls_by_wait_time"
-    if "extension_stat" in name or ("inbound answered" in h and "agent extension" in h):
+
+    # ── Extension statistics ──────────────────────────────────────────────
+    if ("extension_stat" in name or "extensionstat" in name
+            or ("inbound answered" in h and "agent extension" in h)):
         return "extension_statistics_by_group"
+
+    # ── User activity ─────────────────────────────────────────────────────
+    if ("user_activity" in name or "useractivity" in name):
+        return "user_activity"
+
     return "unknown"
 
 
