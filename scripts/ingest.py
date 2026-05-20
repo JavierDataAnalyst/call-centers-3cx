@@ -129,7 +129,8 @@ def detect_type(path: Path, headers: list) -> str:
     h = [x.strip().lower() for x in headers]
 
     # ── Call reports ──────────────────────────────────────────────────────
-    if ("call_report" in name or "callhistory" in name or "call history" in name
+    if ("call_report" in name or "callreport" in name
+            or "callhistory" in name or "call history" in name
             or ("call id" in h and "from" in h and "to" in h)):
         return "call_reports"
 
