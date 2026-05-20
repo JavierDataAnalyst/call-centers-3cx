@@ -85,6 +85,7 @@ $$;
 -- ── kpi_agentes: per-agent performance table ─────────────────
 
 DROP FUNCTION IF EXISTS kpi_agentes(text,date,date,text);
+DROP FUNCTION IF EXISTS kpi_agentes(text,date,date,text,text);
 
 CREATE OR REPLACE FUNCTION kpi_agentes(
   dept         TEXT DEFAULT 'todos',
@@ -94,12 +95,14 @@ CREATE OR REPLACE FUNCTION kpi_agentes(
   p_direction  TEXT DEFAULT NULL
 )
 RETURNS TABLE(
-  agente          text,
-  agent_id        text,
-  departamento    text,
-  avg_real_min    numeric,
-  avg_real_mm_ss  text,
-  llamadas_reales bigint
+  agente            text,
+  agent_id          text,
+  departamento      text,
+  avg_real_min      numeric,
+  avg_real_mm_ss    text,
+  llamadas_reales   bigint,
+  dias_activos      bigint,
+  avg_llamadas_dia  numeric
 )
 LANGUAGE sql SECURITY DEFINER AS $$
   SELECT
@@ -110,7 +113,12 @@ LANGUAGE sql SECURITY DEFINER AS $$
     LPAD((AVG(fc.talking_seconds) FILTER (WHERE fc.talking_seconds >= 12) / 60)::int::text, 2, '0')
       || ':' ||
       LPAD(MOD(ROUND(AVG(fc.talking_seconds) FILTER (WHERE fc.talking_seconds >= 12))::int, 60)::text, 2, '0'),
-    COUNT(*) FILTER (WHERE fc.talking_seconds >= 12)
+    COUNT(*) FILTER (WHERE fc.talking_seconds >= 12),
+    COUNT(DISTINCT fc.date_key),
+    ROUND(
+      COUNT(*) FILTER (WHERE fc.talking_seconds >= 12)::numeric
+      / NULLIF(COUNT(DISTINCT fc.date_key), 0),
+    1)
   FROM fact_calls fc
   JOIN dim_agent da ON fc.agent_id = da.agent_id
   WHERE da.es_equipo = true
