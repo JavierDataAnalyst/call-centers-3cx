@@ -288,8 +288,13 @@ def ingest_call_reports(sb, rows, report_date: str):
 
     for r in [r for r in rows if not is_summary_row(r)]:
         call_time = r.get("Call Time", "").strip()
-        agent_id, agent_name = parse_agent_parens(r.get("From", ""))
         d = call_time[:10] if len(call_time) >= 10 else report_date
+
+        # Try "From" first (outbound/internal: caller is the agent)
+        agent_id, agent_name = parse_agent_parens(r.get("From", ""))
+        if not (agent_id and is_extension(agent_id)):
+            # Inbound: agent is the callee — try "To" column
+            agent_id, agent_name = parse_agent_parens(r.get("To", ""))
 
         if agent_id and is_extension(agent_id):
             agents[agent_id] = agent_name
@@ -322,9 +327,12 @@ def ingest_call_reports(sb, rows, report_date: str):
             "transcription":         r.get("Transcription", "").strip() or None,
         })
 
-    # deduplicate by call_id — keep last occurrence
+    # deduplicate by call_id:
+    # among rows sharing the same call_id, prefer the one with an agent assigned
+    # (the agent row is the most informative — IVR/queue rows have agent_id=None)
+    records.sort(key=lambda x: (x["call_id"] or "", 0 if x["agent_id"] else 1))
     seen, unique = set(), []
-    for rec in reversed(records):
+    for rec in records:
         if rec["call_id"] and rec["call_id"] not in seen:
             seen.add(rec["call_id"])
             unique.append(rec)
